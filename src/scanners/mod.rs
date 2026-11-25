@@ -430,7 +430,7 @@ pub(crate) fn open_bounded_zip(
     if archive_size > MAX_ARCHIVE_FILE_BYTES {
         return Err(limit_error("archive file", archive_size, MAX_ARCHIVE_FILE_BYTES).into());
     }
-    let archive = zip::ZipArchive::new(file)?;
+    let mut archive = zip::ZipArchive::new(file)?;
     if archive.len() > MAX_ARCHIVE_MEMBERS {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -441,6 +441,7 @@ pub(crate) fn open_bounded_zip(
         )
         .into());
     }
+    archive.validate_header_consistency()?;
     Ok(archive)
 }
 

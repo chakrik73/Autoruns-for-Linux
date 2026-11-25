@@ -264,7 +264,7 @@ fn scan_oxt(
         let mut evidence = OxtEvidence::default();
         for index in 0..archive.len() {
             let mut member = archive.by_index(index)?;
-            let name = member.name().to_string();
+            let name = member.name()?.into_owned();
             if name.ends_with(".so") {
                 evidence.native_members.push(name.clone());
             }

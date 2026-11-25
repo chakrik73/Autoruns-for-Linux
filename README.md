@@ -125,6 +125,9 @@ boundaries are reported explicitly rather than mapped inaccurately.
 	diagnostics while valid rows are still emitted.
 - Text sources and inspected XPI/OXT metadata are read under explicit per-file,
 	member-count, per-member, and cumulative decompression limits.
+- XPI/OXT archives with inconsistent local and central directory headers,
+	duplicate member names, or overlapping entries are rejected with a
+	partial-scan diagnostic before metadata is inspected.
 - Target-file metadata is inspected without executing discovered code. Runtime
 	service/process state (`active`, `inactive`, or `failed`) is not queried and
 	is unavailable for offline roots.

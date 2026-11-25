@@ -30,6 +30,9 @@ The release binary is written to `target/release/autoruns`.
 
 ## Third-party notices
 
+The ZIP dependency uses `flate2`'s `rust_backend` explicitly to retain the
+previous pure-Rust compression backend and existing accepted-license policy.
+
 `THIRD-PARTY-NOTICES.txt` is generated from the locked Linux dependency graph
 with `cargo-about` 0.9.2. Regenerate it whenever `Cargo.lock`, dependency
 features, `about.toml`, or `about.hbs` changes:

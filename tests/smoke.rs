@@ -915,6 +915,66 @@ fn malformed_oxt_is_a_partial_scan() {
 }
 
 #[test]
+fn inconsistent_archive_headers_are_partial_scans() {
+    for (category, relative, members) in [
+        (
+            "browser",
+            "home/alice/.mozilla/firefox/fixture.default/extensions/cloaked.xpi",
+            vec![(
+                "manifest.json",
+                br#"{"name":"Cloaked Fixture","version":"1.0","manifest_version":2}"#.as_slice(),
+            )],
+        ),
+        (
+            "browser",
+            "home/alice/.mozilla/firefox/fixture.default/extensions/cloaked.xpi",
+            vec![
+                ("unused.txt", b"unused metadata".as_slice()),
+                (
+                    "manifest.json",
+                    br#"{"name":"Cloaked Fixture","version":"1.0","manifest_version":2}"#.as_slice(),
+                ),
+            ],
+        ),
+        (
+            "applications",
+            "usr/lib/libreoffice/share/extensions/cloaked.oxt",
+            vec![(
+                "description.xml",
+                br#"<description><display-name><name>Cloaked Fixture</name></display-name></description>"#.as_slice(),
+            )],
+        ),
+    ] {
+        let root = TempRoot::new();
+        root.write(
+            "home/alice/.mozilla/firefox/profiles.ini",
+            "[Profile0]\nName=default\nIsRelative=1\nPath=fixture.default\n",
+        );
+        root.write_zip(relative, &members);
+        let path = root.path().join(relative);
+        let mut bytes = fs::read(&path).expect("read ZIP fixture");
+        assert_eq!(&bytes[..4], b"PK\x03\x04");
+        let name_len = u16::from_le_bytes([bytes[26], bytes[27]]) as usize;
+        // Alter only the first local filename, leaving the central directory intact.
+        bytes[30..30 + name_len].fill(b'x');
+        fs::write(&path, bytes).expect("write inconsistent ZIP fixture");
+        let root_arg = root.path().to_string_lossy().to_string();
+
+        let output = run_output(&["-nobanner", "-a", category, "--root", &root_arg, "-c"]);
+
+        assert_eq!(output.status.code(), Some(3), "fixture: {members:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("cloaked."), "stderr: {stderr}");
+        assert!(
+            stderr.contains("header inconsistency"),
+            "stderr: {stderr}"
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(!stdout.contains("Cloaked Fixture"), "stdout: {stdout}");
+    }
+}
+
+#[test]
 fn oversized_text_and_archive_inputs_are_bounded() {
     const MIB: usize = 1024 * 1024;
 
