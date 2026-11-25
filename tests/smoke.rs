@@ -975,6 +975,121 @@ fn inconsistent_archive_headers_are_partial_scans() {
 }
 
 #[test]
+fn duplicate_names_and_overlapping_entries_are_partial_scans() {
+    let stored_zip = |name: &str, contents: &[u8]| {
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        writer
+            .start_file(name, options)
+            .expect("start stored member");
+        writer.write_all(contents).expect("write stored member");
+        writer.finish().expect("finish stored ZIP").into_inner()
+    };
+
+    for (category, relative, member_name, contents) in [
+        (
+            "browser",
+            "home/alice/.mozilla/firefox/fixture.default/extensions/ambiguous.xpi",
+            "manifest.json",
+            br#"{"name":"Ambiguous Fixture","version":"1.0","manifest_version":2}"#.as_slice(),
+        ),
+        (
+            "applications",
+            "usr/lib/libreoffice/share/extensions/ambiguous.oxt",
+            "description.xml",
+            br#"<description><display-name><name>Ambiguous Fixture</name></display-name></description>"#.as_slice(),
+        ),
+    ] {
+        for diagnostic in ["duplicate file names", "overlapping entries"] {
+            let root = TempRoot::new();
+            root.write(
+                "home/alice/.mozilla/firefox/profiles.ini",
+                "[Profile0]\nName=default\nIsRelative=1\nPath=fixture.default\n",
+            );
+            let path = root.path().join(relative);
+            let bytes = if diagnostic == "duplicate file names" {
+                let other_name = "x".repeat(member_name.len());
+                root.write_zip(relative, &[(member_name, contents), (&other_name, contents)]);
+                let mut bytes = fs::read(&path).expect("read duplicate ZIP fixture");
+                let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes))
+                    .expect("open duplicate ZIP fixture");
+                let other = archive.by_index(1).expect("second ZIP member");
+                let local_name = other.header_start() as usize + 30;
+                let central_name = other.central_header_start() as usize + 46;
+                drop(other);
+                drop(archive);
+                bytes[local_name..local_name + member_name.len()]
+                    .copy_from_slice(member_name.as_bytes());
+                bytes[central_name..central_name + member_name.len()]
+                    .copy_from_slice(member_name.as_bytes());
+                bytes
+            } else {
+                let inner = stored_zip(member_name, contents);
+                let inner_archive = zip::ZipArchive::new(std::io::Cursor::new(&inner))
+                    .expect("open inner ZIP fixture");
+                let inner_directory = inner_archive.central_directory_start() as usize;
+                let mut central_entry = inner[inner_directory..inner.len() - 22].to_vec();
+                let mut bytes = stored_zip("unused.txt", &inner);
+                let mut outer_archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes))
+                    .expect("open outer ZIP fixture");
+                let outer_directory = outer_archive.central_directory_start() as usize;
+                let inner_offset = outer_archive
+                    .by_index(0)
+                    .expect("outer ZIP member")
+                    .data_start()
+                    .expect("stored member data offset");
+                central_entry[42..46].copy_from_slice(
+                    &u32::try_from(inner_offset).expect("small fixture offset").to_le_bytes(),
+                );
+                // Index the embedded member as well as its containing stored member.
+                // Both entries retain valid headers and CRCs, but their ranges overlap.
+                let end = bytes.len() - 22;
+                let entry_len = central_entry.len();
+                bytes.splice(end..end, central_entry);
+                let end = end + entry_len;
+                bytes[end + 8..end + 10].copy_from_slice(&2_u16.to_le_bytes());
+                bytes[end + 10..end + 12].copy_from_slice(&2_u16.to_le_bytes());
+                let directory_size = u32::try_from(end - outer_directory)
+                    .expect("small fixture central directory");
+                bytes[end + 12..end + 16].copy_from_slice(&directory_size.to_le_bytes());
+                root.write(relative, "");
+                bytes
+            };
+            fs::write(&path, &bytes).expect("write ambiguous ZIP fixture");
+            let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
+                .expect("open ambiguous ZIP fixture");
+            assert_eq!(
+                archive.has_duplicate_names(),
+                diagnostic == "duplicate file names"
+            );
+            assert_eq!(
+                archive.has_overlapping_entries().expect("check entry ranges"),
+                diagnostic == "overlapping entries"
+            );
+            let mut metadata = String::new();
+            std::io::Read::read_to_string(
+                &mut archive.by_name(member_name).expect("read fixture metadata"),
+                &mut metadata,
+            )
+            .expect("fixture metadata and CRC are valid");
+            assert!(metadata.contains("Ambiguous Fixture"));
+            let root_arg = root.path().to_string_lossy().to_string();
+
+            let output = run_output(&["-nobanner", "-a", category, "--root", &root_arg, "-c"]);
+
+            assert_eq!(output.status.code(), Some(3), "{category}: {diagnostic}");
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(stderr.contains("ambiguous."), "stderr: {stderr}");
+            assert!(stderr.contains("header inconsistency"), "stderr: {stderr}");
+            assert!(stderr.contains(diagnostic), "stderr: {stderr}");
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(!stdout.contains("Ambiguous Fixture"), "stdout: {stdout}");
+        }
+    }
+}
+
+#[test]
 fn oversized_text_and_archive_inputs_are_bounded() {
     const MIB: usize = 1024 * 1024;
 
